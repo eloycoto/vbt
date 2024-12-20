@@ -49,6 +49,22 @@ async fn ble_task<C: Controller>(
         if (i > 50) {
             i = 0;
         }
+        info!("I --> {}", i);
+        if i == 20 || i == 40 || i == 30 {
+            info!("********new value******************");
+            Timer::after(Duration::from_secs(10)).await;
+            let o = i + 1;
+            let oz = server
+                .random_service
+                .random_value
+                .notify(server, &connection, &o)
+                .await;
+            info!("OO Send--->{:?}", oz);
+            Timer::after(Duration::from_secs(10)).await;
+
+            info!("OO Finish--->{:?}", oz);
+        }
+
         let oo = server.set(&random_value, &i);
         match connection.next().await {
             ConnectionEvent::Gatt { data } => {
