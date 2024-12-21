@@ -10,9 +10,10 @@ use esp_hal::prelude::*;
 use log::info;
 
 use esp_wifi::ble::controller::BleConnector;
-
+use firmware::ble_config::BleConfig;
+use firmware::ble_config::BleConnectionState;
+use firmware::ble_config::BleController;
 use trouble_host::prelude::*;
-
 extern crate alloc;
 
 // GATT Server definition
@@ -395,12 +396,27 @@ async fn main(_spawner: Spawner) {
     let bluetooth = peripherals.BT;
     let connector = BleConnector::new(&init, bluetooth);
     let controller: ExternalController<_, 20> = ExternalController::new(connector);
-    run_ble(controller).await;
 
-    loop {
-        info!("Hello world!");
-        Timer::after(Duration::from_secs(60)).await;
-    }
+    let mut config = BleConfig::default();
+    config.device_name = "Eloy VBT";
+    config.min_interval = Duration::from_millis(30);
+    config.max_interval = Duration::from_millis(60);
+
+    let mut ble = BleController::new(config);
+    ble.subscribe_to_state_changes(|state| match state {
+        BleConnectionState::Connected => info!("Device Connected!"),
+        BleConnectionState::Disconnected => info!("Device Disconnected"),
+        BleConnectionState::Advertising => info!("Advertising..."),
+        BleConnectionState::Error(e) => info!("Error occurred: {:?}", e),
+    })
+    .unwrap();
+    ble.run(controller).await;
+    // run_ble(controller).await;
+
+    // loop {
+    //     info!("Hello world!");
+    //     Timer::after(Duration::from_secs(60)).await;
+    // }
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/v0.22.0/examples/src/bin
 }
