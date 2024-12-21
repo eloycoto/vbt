@@ -1,23 +1,19 @@
 #![no_std]
 #![no_main]
-#![allow(warnings)]
+// #![allow(warnings)]
 
 use bt_hci::controller::ExternalController;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::prelude::*;
-use esp_wifi::ble::*;
 use log::info;
 
-use esp_hal::{rng::Rng, time, timer::timg::TimerGroup};
-use esp_wifi::{ble::controller::BleConnector, init};
+use esp_wifi::ble::controller::BleConnector;
 
 use trouble_host::prelude::*;
 
 extern crate alloc;
-
-use alloc::format;
 
 // GATT Server definition
 #[gatt_server]
@@ -35,7 +31,7 @@ struct RandomService {
 async fn ble_task<C: Controller>(
     server: &Server<'_>,
     connection: Connection<'_>,
-    stack: Stack<'_, C>,
+    _stack: Stack<'_, C>,
 ) {
     info!(
         "BLE Task Started - Connection Handle: {:?}",
@@ -46,7 +42,7 @@ async fn ble_task<C: Controller>(
     loop {
         let random_value = server.random_service.random_value;
         i += 1;
-        if (i > 50) {
+        if i > 50 {
             i = 0;
         }
         info!("I --> {}", i);
@@ -65,7 +61,7 @@ async fn ble_task<C: Controller>(
             info!("OO Finish--->{:?}", oz);
         }
 
-        let oo = server.set(&random_value, &i);
+        let _oo = server.set(&random_value, &i);
         match connection.next().await {
             ConnectionEvent::Gatt { data } => {
                 info!("GATT event: {:?}", data.request());
@@ -96,8 +92,7 @@ async fn ble_task<C: Controller>(
             ConnectionEvent::Disconnected { reason } => {
                 info!("Client disconnected: {:?}", reason);
                 break;
-            }
-            _ => {}
+            } // _ => {}
         }
 
         // Optional: Periodic notification to keep connection alive
@@ -107,77 +102,77 @@ async fn ble_task<C: Controller>(
     info!("BLE Task Ended");
 }
 
-async fn ble_task_bk<C: Controller>(
-    server: &Server<'_>,
-    connection: Connection<'_>,
-    stack: Stack<'_, C>,
-) {
-    let random = server.random_service.random_value;
-    let mut i = 0;
+// async fn ble_task_bk<C: Controller>(
+//     server: &Server<'_>,
+//     connection: Connection<'_>,
+//     _stack: Stack<'_, C>,
+// ) {
+//     let random = server.random_service.random_value;
+//     let i = 0;
 
-    // Create a clone of the connection for events
-    let conn_for_events = connection.clone();
+//     // Create a clone of the connection for events
+//     let conn_for_events = connection.clone();
 
-    loop {
-        info!("Muy loco aqui el loop");
-        match conn_for_events.next().await {
-            ConnectionEvent::Disconnected { reason } => {
-                info!("Client disconnected: {:?}", reason);
-                break;
-            }
-            ConnectionEvent::Gatt { data } => {
-                info!("GATT eventl");
-            }
-            event => {
-                info!("Received event");
-            }
-        }
-    }
+//     loop {
+//         info!("Muy loco aqui el loop");
+//         match conn_for_events.next().await {
+//             ConnectionEvent::Disconnected { reason } => {
+//                 info!("Client disconnected: {:?}", reason);
+//                 break;
+//             }
+//             ConnectionEvent::Gatt { data } => {
+//                 info!("GATT eventl");
+//             }
+//             event => {
+//                 info!("Received event");
+//             }
+//         }
+//     }
 
-    // let _ = embassy_futures::join::join(
-    //     // Task to handle connection events
-    //     async move {
-    //         loop {
-    //             info!("Muy loco aqui el loop");
-    //             match conn_for_events.next().await {
-    //                 ConnectionEvent::Disconnected { reason } => {
-    //                     info!("Client disconnected: {:?}", reason);
-    //                     break;
-    //                 }
-    //                 ConnectionEvent::Gatt { data } => {
-    //                     info!("GATT eventl");
-    //                 }
-    //                 event => {
-    //                     info!("Received event");
-    //                 }
-    //             }
-    //         }
-    //     },
-    //     // Task to send notifications
-    //     async move {
-    //         loop {
-    //             let value: u8 = i;
-    //             if i > 50 {
-    //                 i = 0;
-    //             }
-    //             i += 1;
+//     // let _ = embassy_futures::join::join(
+//     //     // Task to handle connection events
+//     //     async move {
+//     //         loop {
+//     //             info!("Muy loco aqui el loop");
+//     //             match conn_for_events.next().await {
+//     //                 ConnectionEvent::Disconnected { reason } => {
+//     //                     info!("Client disconnected: {:?}", reason);
+//     //                     break;
+//     //                 }
+//     //                 ConnectionEvent::Gatt { data } => {
+//     //                     info!("GATT eventl");
+//     //                 }
+//     //                 event => {
+//     //                     info!("Received event");
+//     //                 }
+//     //             }
+//     //         }
+//     //     },
+//     //     // Task to send notifications
+//     //     async move {
+//     //         loop {
+//     //             let value: u8 = i;
+//     //             if i > 50 {
+//     //                 i = 0;
+//     //             }
+//     //             i += 1;
 
-    //             match random.notify(server, &connection, &value).await {
-    //                 Ok(_) => {
-    //                     info!("Notified random value: {}", value);
-    //                 }
-    //                 Err(e) => {
-    //                     info!("Error notifying value: {:?}", e);
-    //                     break;
-    //                 }
-    //             }
+//     //             match random.notify(server, &connection, &value).await {
+//     //                 Ok(_) => {
+//     //                     info!("Notified random value: {}", value);
+//     //                 }
+//     //                 Err(e) => {
+//     //                     info!("Error notifying value: {:?}", e);
+//     //                     break;
+//     //                 }
+//     //             }
 
-    //             Timer::after(Duration::from_secs(10)).await;
-    //         }
-    //     },
-    // )
-    // .await;
-}
+//     //             Timer::after(Duration::from_secs(10)).await;
+//     //         }
+//     //     },
+//     // )
+//     // .await;
+// }
 
 async fn run_ble(controller: impl Controller) {
     let mut resources = HostResources::<_, 1, 2, 251>::new(PacketQos::None);
@@ -365,7 +360,7 @@ async fn run_ble(controller: impl Controller) {
 // }
 
 #[main]
-async fn main(spawner: Spawner) {
+async fn main(_spawner: Spawner) {
     let peripherals = esp_hal::init({
         let mut config = esp_hal::Config::default();
         config.cpu_clock = CpuClock::max();
