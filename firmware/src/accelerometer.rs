@@ -20,17 +20,24 @@ const ADXL345_DATAY1: u8 = 0x35;
 const ADXL345_DATAZ0: u8 = 0x36;
 const ADXL345_DATAZ1: u8 = 0x37;
 
-const WINDOW_SIZE: usize = 5;
 const CALIBRATION_SAMPLES: usize = 10;
+
+const DEFAULT_UP_THRESHOLD: f32 = -0.3; // Threshold for upward motion
+const DEFAULT_DOWN_THRESHOLD: f32 = 0.3; // Threshold for downward motion
+
+const SAMPLING_RATE: f32 = 10.0; // Hz - for 100ms sampling period
+const WINDOW_SIZE: usize = 5;
+
 pub struct MotionDetector<I2C> {
     i2c: I2C,
     baseline: Option<(f32, f32, f32)>,
     samples: [(f32, f32, f32); WINDOW_SIZE],
     sample_index: usize,
     sample_count: usize,
-    motion_threshold: f32,
+    up_threshold: f32,
+    down_threshold: f32,
     is_moving: bool,
-    last_position: DevicePosition,
+    last_position: LiftPosition,
 }
 
 impl<I2C> MotionDetector<I2C>
@@ -44,9 +51,10 @@ where
             samples: [(0.0, 0.0, 0.0); WINDOW_SIZE],
             sample_index: 0,
             sample_count: 0,
-            motion_threshold: 0.1,
+            up_threshold: DEFAULT_UP_THRESHOLD,
+            down_threshold: DEFAULT_DOWN_THRESHOLD,
             is_moving: false,
-            last_position: DevicePosition::Unknown,
+            last_position: LiftPosition::Rest,
         };
         detector.power_on().await?;
         detector.calibrate().await?;
@@ -81,7 +89,6 @@ where
     async fn power_on(&mut self) -> Result<(), I2C::Error> {
         let tx_buf = [ADXL345_POWER_CTL, 0x08];
         self.i2c.write(ADXL345_ADDR, &tx_buf).await?;
-
         Ok(())
     }
 
@@ -101,108 +108,150 @@ where
             sum.1 / CALIBRATION_SAMPLES as f32,
             sum.2 / CALIBRATION_SAMPLES as f32,
         ));
-
+        log::info!("Calibration complete. Baseline: {:?}", self.baseline);
         Ok(())
     }
+    pub async fn get_next_motion_state(&mut self) -> Result<MotionState, I2C::Error> {
+        // Get current acceleration reading
+        let accel = self.get_accel().await?;
+        let z_accel = accel.2;
 
-    pub async fn get_motion_state(&mut self) -> Result<MotionState, I2C::Error> {
-        let raw_accel = self.get_accel().await?;
+        // Get the baseline-adjusted acceleration
+        let adjusted_accel = match self.baseline {
+            Some(baseline) => z_accel - baseline.2,
+            None => z_accel,
+        };
 
-        self.samples[self.sample_index] = raw_accel;
+        // Update sliding window of samples
+        self.samples[self.sample_index] = (accel.0, accel.1, adjusted_accel);
         self.sample_index = (self.sample_index + 1) % WINDOW_SIZE;
         if self.sample_count < WINDOW_SIZE {
             self.sample_count += 1;
         }
 
-        let avg_accel = self.calculate_moving_average();
+        // Calculate velocity through integration
+        let dt = 1.0 / SAMPLING_RATE; // 0.1 seconds for 10Hz
+        let velocity = self.calculate_velocity(adjusted_accel, dt);
 
-        let relative_accel = match self.baseline {
-            Some(baseline) => (
-                avg_accel.0 - baseline.0,
-                avg_accel.1 - baseline.1,
-                avg_accel.2 - baseline.2,
-            ),
-            None => avg_accel,
-        };
-
-        let acceleration_magnitude =
-            (relative_accel.0.powi(2) + relative_accel.1.powi(2) + relative_accel.2.powi(2)).sqrt();
-
-        self.is_moving = acceleration_magnitude > self.motion_threshold;
-
-        // Determine position based on z-axis
-        let new_position = if relative_accel.2 > 0.5 {
-            DevicePosition::Down
-        } else if relative_accel.2 < -0.5 {
-            DevicePosition::Up
-        } else {
-            self.last_position.clone()
-        };
-
-        self.last_position = new_position.clone();
+        // Determine motion state based on acceleration and velocity
+        let position = self.determine_position(adjusted_accel, velocity);
 
         Ok(MotionState {
-            position: new_position,
-            is_moving: self.is_moving,
-            acceleration: avg_accel,
-            relative_acceleration: relative_accel,
+            position,
+            velocity,
+            acceleration: adjusted_accel,
         })
     }
 
-    fn calculate_moving_average(&self) -> (f32, f32, f32) {
-        let mut sum = (0.0, 0.0, 0.0);
-        let count = self.sample_count;
-
-        // Only average the number of samples we've actually collected
-        for i in 0..count {
-            sum.0 += self.samples[i].0;
-            sum.1 += self.samples[i].1;
-            sum.2 += self.samples[i].2;
+    fn calculate_velocity(&self, current_accel: f32, dt: f32) -> f32 {
+        if self.sample_count < 2 {
+            return 0.0;
         }
 
-        (
-            sum.0 / count as f32,
-            sum.1 / count as f32,
-            sum.2 / count as f32,
-        )
+        // Use a moving average of acceleration for smoother velocity
+        let mut sum_accel = 0.0;
+        let mut count = 0;
+
+        for i in 0..self.sample_count {
+            sum_accel += self.samples[i].2;
+            count += 1;
+        }
+
+        let avg_accel = if count > 0 {
+            sum_accel / count as f32
+        } else {
+            0.0
+        };
+        avg_accel * dt // Simple integration for velocity
+    }
+
+    fn determine_position(&mut self, accel: f32, velocity: f32) -> LiftPosition {
+        // Adjusted thresholds based on observed values
+        const VELOCITY_THRESHOLD: f32 = 0.05; // m/s
+        const ACCELERATION_THRESHOLD: f32 = 0.1; // m/s²
+
+        // Store the current position before updating
+        let current_position = match (
+            velocity.abs() < VELOCITY_THRESHOLD,
+            accel.abs() < ACCELERATION_THRESHOLD,
+        ) {
+            // If both velocity and acceleration are below thresholds, we're at rest
+            (true, true) => {
+                if self.last_position == LiftPosition::Up {
+                    LiftPosition::TopPosition
+                } else if self.last_position == LiftPosition::Down {
+                    LiftPosition::BottomPosition
+                } else {
+                    LiftPosition::Rest
+                }
+            }
+            // If we have significant movement
+            _ => {
+                if velocity > VELOCITY_THRESHOLD {
+                    LiftPosition::MovingUp
+                } else if velocity < -VELOCITY_THRESHOLD {
+                    LiftPosition::MovingDown
+                } else {
+                    // Maintain previous position if in doubt
+                    match self.last_position {
+                        LiftPosition::Up => LiftPosition::TopPosition,
+                        LiftPosition::Down => LiftPosition::BottomPosition,
+                        _ => LiftPosition::Rest,
+                    }
+                }
+            }
+        };
+
+        // Update the last known position based on current state
+        self.last_position = match current_position {
+            LiftPosition::TopPosition => LiftPosition::Up,
+            LiftPosition::BottomPosition => LiftPosition::Down,
+            _ => self.last_position,
+        };
+
+        current_position
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum DevicePosition {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LiftPosition {
+    Rest,
+    PREVIOUS,
+    MovingUp,
+    MovingDown,
+    TopPosition,
+    BottomPosition,
     Up,
     Down,
-    Unknown,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MotionState {
-    pub position: DevicePosition,
-    pub is_moving: bool,
-    pub acceleration: (f32, f32, f32),
-    pub relative_acceleration: (f32, f32, f32),
+    pub position: LiftPosition,
+    pub velocity: f32,     // Current velocity in m/s
+    pub acceleration: f32, // Current acceleration in m/s²
 }
 
 impl MotionState {
     pub fn is_up(&self) -> bool {
-        self.position == DevicePosition::Up
+        self.position == LiftPosition::MovingUp
     }
 
     pub fn is_down(&self) -> bool {
-        self.position == DevicePosition::Down
+        self.position == LiftPosition::MovingDown
     }
 
-    pub fn get_acceleration(&self) -> (f32, f32, f32) {
-        self.acceleration
-    }
+    // pub fn get_acceleration(&self) -> (f32, f32, f32) {
+    //     self.acceleration
+    // }
 
-    pub fn debug_str(&self) -> heapless::String<128> {
-        let mut s = heapless::String::new();
-        let _ = write!(
-            s,
-            "M{{pos:{:?},mov:{}}} acceleration: {:?}, relative_acceleration: {:?}",
-            self.position, self.is_moving, self.acceleration, self.relative_acceleration
-        );
-        s
-    }
+    // pub fn debug_str(&self) -> heapless::String<128> {
+    //     let mut s = heapless::String::new();
+    //     let _ = write!(
+    //         s,
+    //         "Position: {}",
+    //         self.position, self.is_moving, self.acceleration.2, self.relative_acceleration.2
+    //     );
+    //     s
+    // }
 }

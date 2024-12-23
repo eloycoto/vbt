@@ -10,6 +10,7 @@ use esp_hal::i2c::master::Config;
 use esp_hal::i2c::master::I2c;
 use esp_hal::prelude::*;
 use log::info;
+use micromath::F32Ext;
 
 use embedded_hal_async::i2c::I2c as _;
 
@@ -83,6 +84,8 @@ async fn main(_spawner: Spawner) {
         .with_scl(peripherals.GPIO2)
         .into_async();
 
+    Timer::after(Duration::from_millis(100)).await;
+
     let mut motion_detector = match MotionDetector::new(i2c).await {
         Ok(detector) => detector,
         Err(e) => {
@@ -92,11 +95,39 @@ async fn main(_spawner: Spawner) {
         }
     };
 
+    let mut up_velocity = 0.0f32;
+    const DT: f32 = 0.1; // 100ms
+                         //
+    info!("Change here!");
     loop {
-        info!(
-            "Test(Horizontal,Forward,Down) -->{:?}",
-            motion_detector.get_accel_raw().await
-        );
+        // match motion_detector.wait_for_upward_movement().await {
+        //     Ok(x) => info!("OK {x}"),
+        //     Err(_) => info!("Falied"),
+        // }
+        // info!(
+        //     "Test(Horizontal,Forward,Down) -->{:?}",
+        //     motion_detector.get_accel_raw().await
+        // );
+        //
+        //
+
+        match motion_detector.get_next_motion_state().await {
+            Ok(x) => {
+                if x.is_up() {
+                    // info!("UP --> {:?}", x.debug_str());
+                    // let acc = x.get_acceleration();
+                    // // up_velocity += acc.2 * DT;
+                    // up_velocity += acc.2 * DT;
+                    info!("UP velocity--> {:?}", x);
+                    // info!("UP velocity: {} {:.2} m/s", acc.2, up_velocity);
+                }
+
+                if x.is_down() {
+                    info!("DOWN --> {:?}", x);
+                }
+            }
+            Err(e) => info!("Error --> {:?}", e),
+        }
         Timer::after(Duration::from_millis(100)).await;
     }
 
