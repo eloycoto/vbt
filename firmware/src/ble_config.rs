@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use embassy_futures::join;
 use embassy_time::{Duration, Timer};
 use heapless::Vec;

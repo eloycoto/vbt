@@ -19,7 +19,7 @@ log = { version = "0.4.21" }
 esp-alloc = { version = "0.5.0" }
 embedded-io = "0.6.1"
 
-embedded-io-async = "0.6.1"
+embedded-io-async = "=0.6.1"
 
 esp-wifi = { version = "0.11.0", default-features=false, features = [
     "esp32c3",
@@ -53,7 +53,9 @@ trouble-host = { version = "0.1.0", features = ["gatt", "derive"] }
 bt-hci = "0.1.2"
 embassy-sync = "0.6.1"
 embassy-futures = "0.1.1"
-
+micromath = "2.1.0"
+embassy-embedded-hal = "=0.2.0"
+embedded-hal-async = "1.0.0"
 
 [profile.dev]
 # Rust debug is too slow.
