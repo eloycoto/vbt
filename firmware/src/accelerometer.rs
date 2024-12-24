@@ -26,7 +26,7 @@ const DEFAULT_UP_THRESHOLD: f32 = -0.3; // Threshold for upward motion
 const DEFAULT_DOWN_THRESHOLD: f32 = 0.3; // Threshold for downward motion
 
 const SAMPLING_RATE: f32 = 10.0; // Hz - for 100ms sampling period
-const WINDOW_SIZE: usize = 5;
+const WINDOW_SIZE: usize = 10;
 
 pub struct MotionDetector<I2C> {
     i2c: I2C,
@@ -175,7 +175,6 @@ where
             velocity.abs() < VELOCITY_THRESHOLD,
             accel.abs() < ACCELERATION_THRESHOLD,
         ) {
-            // If both velocity and acceleration are below thresholds, we're at rest
             (true, true) => {
                 if self.last_position == LiftPosition::Up {
                     LiftPosition::TopPosition
@@ -185,14 +184,13 @@ where
                     LiftPosition::Rest
                 }
             }
-            // If we have significant movement
+
             _ => {
                 if velocity > VELOCITY_THRESHOLD {
                     LiftPosition::MovingUp
                 } else if velocity < -VELOCITY_THRESHOLD {
                     LiftPosition::MovingDown
                 } else {
-                    // Maintain previous position if in doubt
                     match self.last_position {
                         LiftPosition::Up => LiftPosition::TopPosition,
                         LiftPosition::Down => LiftPosition::BottomPosition,
@@ -202,7 +200,6 @@ where
             }
         };
 
-        // Update the last known position based on current state
         self.last_position = match current_position {
             LiftPosition::TopPosition => LiftPosition::Up,
             LiftPosition::BottomPosition => LiftPosition::Down,

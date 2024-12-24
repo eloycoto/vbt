@@ -113,18 +113,20 @@ async fn main(_spawner: Spawner) {
 
         match motion_detector.get_next_motion_state().await {
             Ok(x) => {
-                if x.is_up() {
-                    // info!("UP --> {:?}", x.debug_str());
-                    // let acc = x.get_acceleration();
-                    // // up_velocity += acc.2 * DT;
-                    // up_velocity += acc.2 * DT;
-                    info!("UP velocity--> {:?}", x);
-                    // info!("UP velocity: {} {:.2} m/s", acc.2, up_velocity);
-                }
+                // if x.is_up() {
+                //     // info!("UP --> {:?}", x.debug_str());
+                //     // let acc = x.get_acceleration();
+                //     // // up_velocity += acc.2 * DT;
+                //     // up_velocity += acc.2 * DT;
+                //     info!("UP velocity--> {:?}", x);
+                //     // info!("UP velocity: {} {:.2} m/s", acc.2, up_velocity);
+                // }
 
-                if x.is_down() {
-                    info!("DOWN --> {:?}", x);
-                }
+                // if x.is_down() {
+                //     info!("DOWN --> {:?}", x);
+                // }
+
+                info!("STATUS --> {:?}", x);
             }
             Err(e) => info!("Error --> {:?}", e),
         }
