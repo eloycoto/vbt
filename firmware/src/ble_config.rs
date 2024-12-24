@@ -1,4 +1,3 @@
-#![allow(warnings)]
 use core::f32;
 
 use embassy_futures::join;
@@ -100,10 +99,6 @@ impl NotificationSender {
 pub enum NotificationMessage {
     RandomValue(u8),
     Velocity(f32),
-}
-
-pub struct NotificationChannel {
-    notification_channel: Channel<NoopRawMutex, NotificationMessage, 32>,
 }
 
 pub struct BleController {
@@ -268,7 +263,7 @@ impl BleController {
         &mut self,
         server: &Server<'_>,
         connection: Connection<'_>,
-        stack: Stack<'_, C>,
+        _stack: Stack<'_, C>,
         receiver: Receiver<'_, NoopRawMutex, NotificationMessage, 32>,
     ) {
         info!("Client is conencted, debugging info");
