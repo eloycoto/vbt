@@ -26,7 +26,7 @@ const DEFAULT_UP_THRESHOLD: f32 = -0.3; // Threshold for upward motion
 const DEFAULT_DOWN_THRESHOLD: f32 = 0.3; // Threshold for downward motion
 
 const SAMPLING_RATE: f32 = 10.0; // Hz - for 100ms sampling period
-const WINDOW_SIZE: usize = 10;
+const WINDOW_SIZE: usize = 60;
 
 pub struct MotionDetector<I2C> {
     i2c: I2C,

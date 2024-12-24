@@ -1,5 +1,12 @@
 #![allow(warnings)]
+use core::f32;
+
 use embassy_futures::join;
+use embassy_futures::select::{select, Either};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::channel::Channel;
+use embassy_sync::channel::Receiver;
+use embassy_sync::channel::Sender;
 use embassy_time::{Duration, Timer};
 use heapless::Vec;
 use log::{debug, error, info, warn};
@@ -15,6 +22,9 @@ struct Server {
 struct RandomService {
     #[characteristic(uuid = "2A58", read, notify)]
     random_value: u8,
+
+    #[characteristic(uuid = "2A59", read, notify)]
+    velocity: f32,
 }
 
 /// Maximum number of notification subscribers
@@ -59,6 +69,43 @@ impl Default for BleConfig {
     }
 }
 
+pub struct NotificationSender {
+    pub channel: Channel<NoopRawMutex, NotificationMessage, 32>,
+    // pub sender: Sender<'a, NoopRawMutex, NotificationMessage, 32>,
+}
+
+impl NotificationSender {
+    pub fn new() -> Self {
+        NotificationSender {
+            channel: Channel::new(),
+        }
+    }
+    pub fn get_sender(&self) -> Sender<'_, NoopRawMutex, NotificationMessage, 32> {
+        self.channel.sender()
+    }
+
+    pub fn get_receiver(&self) -> Receiver<'_, NoopRawMutex, NotificationMessage, 32> {
+        self.channel.receiver()
+    }
+
+    pub async fn notify_velocity(&self, value: f32) {
+        let _ = self
+            .get_sender()
+            .send(NotificationMessage::Velocity(value))
+            .await;
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum NotificationMessage {
+    RandomValue(u8),
+    Velocity(f32),
+}
+
+pub struct NotificationChannel {
+    notification_channel: Channel<NoopRawMutex, NotificationMessage, 32>,
+}
+
 pub struct BleController {
     config: BleConfig,
     connection_state: BleConnectionState,
@@ -67,11 +114,12 @@ pub struct BleController {
 
 impl BleController {
     pub fn new(config: BleConfig) -> Self {
-        Self {
+        let res = Self {
             config,
             connection_state: BleConnectionState::Disconnected,
             notification_subscribers: Vec::new(),
-        }
+        };
+        return res;
     }
 
     pub fn subscribe_to_state_changes(
@@ -104,7 +152,11 @@ impl BleController {
     }
 
     /// Starts the BLE controller with the given hardware controller
-    pub async fn run<C: Controller>(&mut self, controller: C) {
+    pub async fn run<C: Controller>(
+        &mut self,
+        controller: C,
+        receiver: Receiver<'_, NoopRawMutex, NotificationMessage, 32>,
+    ) {
         info!("*****Starting BLE controller*************");
 
         let mut resources = HostResources::<_, 1, 2, 251>::new(PacketQos::None);
@@ -125,7 +177,7 @@ impl BleController {
         info!("RUN --->1");
         let _ = join::join(
             runner.run(),
-            self.run_advertising_loop(&mut peripheral, &server, stack),
+            self.run_advertising_loop(&mut peripheral, &server, stack, receiver),
         )
         .await;
     }
@@ -136,6 +188,7 @@ impl BleController {
         peripheral: &mut Peripheral<'_, C>,
         server: &Server<'_>,
         stack: Stack<'_, C>,
+        receiver: Receiver<'_, NoopRawMutex, NotificationMessage, 32>,
     ) {
         loop {
             let mut adv_data = [0; 31];
@@ -189,7 +242,7 @@ impl BleController {
                         Ok(connection) => {
                             info!("Client connected!");
                             self.update_state(BleConnectionState::Connected);
-                            self.handle_connection(server, connection, stack.clone())
+                            self.handle_connection(server, connection, stack.clone(), receiver)
                                 .await;
                         }
                         Err(e) => {
@@ -216,37 +269,96 @@ impl BleController {
         server: &Server<'_>,
         connection: Connection<'_>,
         stack: Stack<'_, C>,
+        receiver: Receiver<'_, NoopRawMutex, NotificationMessage, 32>,
     ) {
-        while let event = connection.next().await {
-            match event {
-                ConnectionEvent::Gatt { data } => {
-                    debug!("GATT event received: {:?}", data.request());
-                    match data.process(server).await {
-                        Ok(Some(event)) => match event {
-                            GattEvent::Read(read_event) => {
-                                debug!("Read event for handle: {}", read_event.handle());
-                                let _ = read_event.reply(Ok(())).await;
+        info!("Client is conencted, debugging info");
+        loop {
+            match select(connection.next(), receiver.receive()).await {
+                // Connection event
+                Either::First(event) => match event {
+                    ConnectionEvent::Gatt { data } => {
+                        debug!("GATT event received: {:?}", data.request());
+                        match data.process(server).await {
+                            Ok(Some(event)) => match event {
+                                GattEvent::Read(read_event) => {
+                                    debug!("Read event for handle: {}", read_event.handle());
+                                    let _ = read_event.reply(Ok(())).await;
+                                }
+                                GattEvent::Write(write_event) => {
+                                    debug!("Write event for handle: {}", write_event.handle());
+                                    let _ = write_event.reply(Ok(())).await;
+                                }
+                            },
+                            Ok(None) => {
+                                debug!("GATT event processed without specific action");
                             }
-                            GattEvent::Write(write_event) => {
-                                debug!("Write event for handle: {}", write_event.handle());
-                                let _ = write_event.reply(Ok(())).await;
+                            Err(e) => {
+                                error!("Error processing GATT event: {:?}", e);
                             }
-                        },
-                        Ok(None) => {
-                            debug!("GATT event processed without specific action");
-                        }
-                        Err(e) => {
-                            error!("Error processing GATT event: {:?}", e);
                         }
                     }
-                }
-                ConnectionEvent::Disconnected { reason } => {
-                    info!("Client disconnected: {:?}", reason);
-                    self.update_state(BleConnectionState::Disconnected);
-                    break;
-                }
+                    ConnectionEvent::Disconnected { reason } => {
+                        info!("Client disconnected: {:?}", reason);
+                        self.update_state(BleConnectionState::Disconnected);
+                        break;
+                    }
+                },
+                Either::Second(msg) => match msg {
+                    NotificationMessage::Velocity(val) => {
+                        if let Err(e) = server
+                            .random_service
+                            .velocity
+                            .notify(server, &connection, &val)
+                            .await
+                        {
+                            error!("Failed to notify velocity: {:?}", e);
+                        }
+                    }
+
+                    NotificationMessage::RandomValue(val) => {
+                        if let Err(e) = server
+                            .random_service
+                            .random_value
+                            .notify(server, &connection, &val)
+                            .await
+                        {
+                            error!("Failed to notify random value: {:?}", e);
+                        }
+                    }
+                },
             }
-            Timer::after(Duration::from_millis(100)).await;
         }
+
+        // match select(connection.next(), receiver.receive()).await {
+        //     match event {
+        //         ConnectionEvent::Gatt { data } => {
+        //             debug!("GATT event received: {:?}", data.request());
+        //             match data.process(server).await {
+        //                 Ok(Some(event)) => match event {
+        //                     GattEvent::Read(read_event) => {
+        //                         debug!("Read event for handle: {}", read_event.handle());
+        //                         let _ = read_event.reply(Ok(())).await;
+        //                     }
+        //                     GattEvent::Write(write_event) => {
+        //                         debug!("Write event for handle: {}", write_event.handle());
+        //                         let _ = write_event.reply(Ok(())).await;
+        //                     }
+        //                 },
+        //                 Ok(None) => {
+        //                     debug!("GATT event processed without specific action");
+        //                 }
+        //                 Err(e) => {
+        //                     error!("Error processing GATT event: {:?}", e);
+        //                 }
+        //             }
+        //         }
+        //         ConnectionEvent::Disconnected { reason } => {
+        //             info!("Client disconnected: {:?}", reason);
+        //             self.update_state(BleConnectionState::Disconnected);
+        //             break;
+        //         }
+        //     }
+        //     Timer::after(Duration::from_millis(100)).await;
+        // }
     }
 }

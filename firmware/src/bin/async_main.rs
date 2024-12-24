@@ -3,12 +3,15 @@
 #![allow(warnings)]
 
 use bt_hci::controller::ExternalController;
+use core::cell::RefCell;
 use embassy_executor::Spawner;
+use embassy_sync::priority_channel::Receiver;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::i2c::master::Config;
 use esp_hal::i2c::master::I2c;
 use esp_hal::prelude::*;
+use firmware::ble_config::NotificationSender;
 use log::info;
 use micromath::F32Ext;
 
@@ -72,12 +75,10 @@ async fn main(_spawner: Spawner) {
         BleConnectionState::Error(e) => info!("Error occurred: {:?}", e),
     })
     .unwrap();
+    let notifications = NotificationSender::new();
+    let receiver = notifications.get_receiver();
 
-    // ble.run(controller).await;
-    // let mut i2c = I2c::new(peripherals.I2C0, Config::default())
-    //     .with_sda(peripherals.GPIO2)
-    //     .with_scl(peripherals.GPIO1)
-    //     .into_async();
+    use embassy_sync::mutex::Mutex;
 
     let mut i2c = I2c::new(peripherals.I2C0, Config::default())
         .with_sda(peripherals.GPIO1)
@@ -95,43 +96,61 @@ async fn main(_spawner: Spawner) {
         }
     };
 
-    let mut up_velocity = 0.0f32;
-    const DT: f32 = 0.1; // 100ms
-                         //
-    info!("Change here!");
-    loop {
-        // match motion_detector.wait_for_upward_movement().await {
-        //     Ok(x) => info!("OK {x}"),
-        //     Err(_) => info!("Falied"),
-        // }
-        // info!(
-        //     "Test(Horizontal,Forward,Down) -->{:?}",
-        //     motion_detector.get_accel_raw().await
-        // );
-        //
-        //
-
-        match motion_detector.get_next_motion_state().await {
-            Ok(x) => {
-                // if x.is_up() {
-                //     // info!("UP --> {:?}", x.debug_str());
-                //     // let acc = x.get_acceleration();
-                //     // // up_velocity += acc.2 * DT;
-                //     // up_velocity += acc.2 * DT;
-                //     info!("UP velocity--> {:?}", x);
-                //     // info!("UP velocity: {} {:.2} m/s", acc.2, up_velocity);
-                // }
-
-                // if x.is_down() {
-                //     info!("DOWN --> {:?}", x);
-                // }
-
-                info!("STATUS --> {:?}", x);
+    let acceleration = async {
+        let mut i = 0;
+        loop {
+            match motion_detector.get_next_motion_state().await {
+                Ok(x) => {
+                    i += 1;
+                    if i > 3 {
+                        notifications.notify_velocity(x.acceleration).await;
+                        info!("STATUS --> {:?}", x);
+                        i = 0
+                    }
+                }
+                Err(e) => info!("Error --> {:?}", e),
             }
-            Err(e) => info!("Error --> {:?}", e),
+            Timer::after(Duration::from_millis(100)).await;
         }
-        Timer::after(Duration::from_millis(100)).await;
-    }
+    };
+
+    let a = async {
+        loop {
+            let data = receiver.receive().await;
+            info!("Data is received here:: {:?}", data);
+        }
+    };
+
+    let pair = embassy_futures::join::join(ble.run(controller, receiver), acceleration).await;
+
+    // info!(
+    //     "Test(Horizontal,Forward,Down) -->{:?}",
+    //     motion_detector.get_accel_raw().await
+    // );
+    //
+    //
+
+    // match motion_detector.get_next_motion_state().await {
+    //     Ok(x) => {
+    //         // if x.is_up() {
+    //         //     // info!("UP --> {:?}", x.debug_str());
+    //         //     // let acc = x.get_acceleration();
+    //         //     // // up_velocity += acc.2 * DT;
+    //         //     // up_velocity += acc.2 * DT;
+    //         //     info!("UP velocity--> {:?}", x);
+    //         //     // info!("UP velocity: {} {:.2} m/s", acc.2, up_velocity);
+    //         // }
+
+    //         // if x.is_down() {
+    //         //     info!("DOWN --> {:?}", x);
+    //         // }
+
+    //         info!("STATUS --> {:?}", x);
+    //     }
+    //     Err(e) => info!("Error --> {:?}", e),
+    // }
+    // Timer::after(Duration::from_millis(100)).await;
+    // }
 
     // let io = gpio::IO::new(peripherals.GPIO, peripherals.IO_MUX);
     // let sda = io.pins.gpio5;
