@@ -1,29 +1,20 @@
-#![allow(warnings)]
-use core::fmt::Write;
-use embassy_time::{Duration, Timer};
 use embedded_hal_async::i2c::I2c;
-use heapless::Vec;
-use log::info;
 use micromath::F32Ext;
 
-const ID_VAL: u8 = 0b11100101;
 const EARTH_GRAVITY: f32 = 9.80665;
 const LSB_SCALE_FACTOR_FULL_RES: f32 = 0.0039;
 
 const ADXL345_ADDR: u8 = 0x53;
 const ADXL345_POWER_CTL: u8 = 0x2D;
-const ADXL345_DATA_FORMAT: u8 = 0x31;
+// const ADXL345_DATA_FORMAT: u8 = 0x31;
 const ADXL345_DATAX0: u8 = 0x32;
-const ADXL345_DATAX1: u8 = 0x33;
-const ADXL345_DATAY0: u8 = 0x34;
-const ADXL345_DATAY1: u8 = 0x35;
-const ADXL345_DATAZ0: u8 = 0x36;
-const ADXL345_DATAZ1: u8 = 0x37;
+// const ADXL345_DATAX1: u8 = 0x33;
+// const ADXL345_DATAY0: u8 = 0x34;
+// const ADXL345_DATAY1: u8 = 0x35;
+// const ADXL345_DATAZ0: u8 = 0x36;
+// const ADXL345_DATAZ1: u8 = 0x37;
 
 const CALIBRATION_SAMPLES: usize = 10;
-
-const DEFAULT_UP_THRESHOLD: f32 = -0.3; // Threshold for upward motion
-const DEFAULT_DOWN_THRESHOLD: f32 = 0.3; // Threshold for downward motion
 
 const SAMPLING_RATE: f32 = 10.0; // Hz - for 100ms sampling period
 const WINDOW_SIZE: usize = 60;
@@ -34,9 +25,6 @@ pub struct MotionDetector<I2C> {
     samples: [(f32, f32, f32); WINDOW_SIZE],
     sample_index: usize,
     sample_count: usize,
-    up_threshold: f32,
-    down_threshold: f32,
-    is_moving: bool,
     last_position: LiftPosition,
 }
 
@@ -51,9 +39,6 @@ where
             samples: [(0.0, 0.0, 0.0); WINDOW_SIZE],
             sample_index: 0,
             sample_count: 0,
-            up_threshold: DEFAULT_UP_THRESHOLD,
-            down_threshold: DEFAULT_DOWN_THRESHOLD,
-            is_moving: false,
             last_position: LiftPosition::Rest,
         };
         detector.power_on().await?;
@@ -143,7 +128,7 @@ where
         })
     }
 
-    fn calculate_velocity(&self, current_accel: f32, dt: f32) -> f32 {
+    fn calculate_velocity(&self, _: f32, dt: f32) -> f32 {
         if self.sample_count < 2 {
             return 0.0;
         }
